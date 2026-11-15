@@ -1,0 +1,5 @@
+{
+    "米饭": {"calories": 116, "protein": 2.6, "carbs": 25.9, "fiber": 0.3},
+    "鸡胸肉": {"calories": 133, "protein": 24.6, "carbs": 0, "fiber": 0},
+    "苹果": {"calories": 52, "protein": 0.3, "carbs": 13.8, "fiber": 2.4}
+}

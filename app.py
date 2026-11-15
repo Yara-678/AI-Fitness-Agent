@@ -1,114 +1,156 @@
 import streamlit as st
 import json
+import os
 from openai import OpenAI
+from langchain_community.document_loaders import TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from tool import get_food_info, calc_exercise_calories
 
-# 页面设置
-st.set_page_config(page_title="AI 私教 Agent", page_icon="🏃")
-st.title("🏃 专业 AI 私教 Agent (RAG版)")
-st.write("我不仅会算热量，我脑子里还有一本《健身秘籍》。")
+st.set_page_config(page_title="全能 AI 私教", page_icon="🏋️")
+st.title("🏋️ 全能 AI 私教 ")
 
-# 尝试从 Streamlit 的保险箱里读取 Key
-# 如果本地测试没配置，就会显示输入框；如果配置了云端，就会隐藏输入框
-try:
-    api_key = st.secrets["ZHIPU_API_KEY"]
-except:
-    with st.sidebar:
-        st.header("本地测试设置")
-        api_key = st.text_input("请输入你的智谱 API Key", type="password")
+with st.sidebar:
+    st.header("设置")
+    api_key = st.text_input("请输入 API Key", type="password")
 
-# 1. 模拟你的“私有知识库”（RAG 的数据源）
-knowledge_base = """
-【秘籍第一条】跑步：每小时消耗约 600 卡路里。建议初学者先从慢跑开始，每次30分钟。
-【秘籍第二条】游泳：每小时消耗约 800 卡路里。游泳对膝盖损伤极小，适合大体重人群。
-【秘籍第三条】练胸肌：推荐俯卧撑，每次做4组，每组做到力竭。新手不要上大重量。
-"""
+if not api_key:
+    st.info("请先在左侧输入 API Key！")
+    st.stop()
 
-# 2. 简单的检索函数（匹配关键词）
-def retrieve_info(query):
-    keywords = ["跑步", "游泳", "胸肌", "俯卧撑"]
-    for word in keywords:
-        if word in query:
-            return knowledge_base
-    return "知识库中没有相关资料。"
+client = OpenAI(api_key=api_key, base_url="https://open.bigmodel.cn/api/paas/v4/")
 
-# 3. 本地工具函数（Agent）
-def calculate_calories(sport):
-    if sport == "跑步": return 600
-    elif sport == "游泳": return 800
-    else: return 100
+# ================= 1. 查书引擎 =================
+@st.cache_resource(show_spinner="正在阅读权威书籍...")
+def init_rag_engine():
+    try:
+        if not os.path.exists("data/book.md"): return []
+        loader = TextLoader("data/book.md", encoding="utf-8")
+        docs = loader.load()
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=50)
+        return text_splitter.split_documents(docs)
+    except: return []
 
-tools = [{
-    "type": "function",
-    "function": {
-        "name": "calculate_calories",
-        "description": "计算某项运动消耗的卡路里",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "sport": {"type": "string", "description": "运动项目名称"}
-            },
-            "required": ["sport"]
+def local_search(query, splits):
+    if not splits: return ""
+    keywords = [kw for kw in list(query) if kw.strip()]
+    matched = []
+    for doc in splits:
+        if sum(1 for kw in keywords if kw in doc.page_content) >= 2:
+            matched.append(doc.page_content)
+    return "\n".join(matched[:2]) if matched else "查无资料。"
+
+splits = init_rag_engine()
+# =======================================================
+
+tools = [
+    {
+        "type": "function", 
+        "function": {
+            "name": "get_food_info", 
+            "description": "查询食物每百克的热量，必须传入食物名字", 
+            "parameters": {"type": "object", "properties": {"food_name": {"type": "string"}}, "required": ["food_name"]}
+        }
+    },
+    {
+        "type": "function", 
+        "function": {
+            "name": "calc_exercise_calories", 
+            "description": "计算运动消耗。必须传入运动类型、时长、体重、坡度和速度", 
+            "parameters": {
+                "type": "object", 
+                "properties": {
+                    "exercise_type": {"type": "string"}, 
+                    "duration_min": {"type": "number"}, 
+                    "weight": {"type": "number"}, 
+                    "incline": {"type": "number"}, 
+                    "speed": {"type": "number"}
+                }, 
+                "required": ["exercise_type", "duration_min", "weight"]
+            }
         }
     }
-}]
+]
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# 显示历史聊天记录
-for message in st.session_state.messages:
-    role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
-    content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
+for msg in st.session_state.messages:
+    role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+    content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
     if role in ["user", "assistant"] and isinstance(content, str):
         with st.chat_message(role):
             st.markdown(content)
 
-if prompt := st.chat_input("比如：游泳有什么好处？或者我跑了1小时消耗多少？"):
-    if not api_key:
-        st.info("请在左侧输入 API Key！")
-        st.stop()
-
+if prompt := st.chat_input("今天练了什么？或者想了解什么健康问题？"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    client = OpenAI(api_key=api_key, base_url="https://open.bigmodel.cn/api/paas/v4/")
-
-    with st.spinner("AI 正在查阅秘籍并思考..."):
-        # 🚨 RAG 核心：先查资料
-        context = retrieve_info(prompt)
-        system_prompt = f"你是一个专业的健身教练。请优先根据以下参考资料回答问题：\n{context}"
-        
+    with st.spinner("教练思考中..."):
+        context = local_search(prompt, splits)
+        system_prompt = f"你是一个专业教练。参考资料：\n{context}\n如果用户问热量，必须调用工具！"
         current_messages = [{"role": "system", "content": system_prompt}] + st.session_state.messages
 
-        # Agent 调用
-        response = client.chat.completions.create(
-            model="glm-4-flash",
-            messages=current_messages,
-            tools=tools
-        )
-        
-        response_message = response.choices[0].message
-        
-        if response_message.tool_calls:
-            current_messages.append(response_message)
-            for tool_call in response_message.tool_calls:
-                function_args = json.loads(tool_call.function.arguments)
-                result = calculate_calories(function_args.get("sport"))
-                current_messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": str(result)
-                })
-            
-            second_response = client.chat.completions.create(
-                model="glm-4-flash",
-                messages=current_messages
+        try:
+            response = client.chat.completions.create(
+                model="glm-4-flash", 
+                messages=current_messages, 
+                tools=tools,
+                tool_choice="auto" 
             )
-            final_answer = second_response.choices[0].message.content
-        else:
-            final_answer = response_message.content
-
-        st.session_state.messages.append({"role": "assistant", "content": final_answer})
-        with st.chat_message("assistant"):
-            st.markdown(final_answer)
+            response_msg = response.choices[0].message
+            
+            if response_msg.tool_calls:
+                current_messages.append(response_msg)
+                
+                for tool_call in response_msg.tool_calls:
+                    # 🚨 防盗门1：拦截参数解析报错
+                    try:
+                        args = json.loads(tool_call.function.arguments)
+                    except:
+                        args = {}
+                        
+                    res = ""
+                    if tool_call.function.name == "get_food_info":
+                        food = args.get("food_name", "苹果") # 没传就默认苹果
+                        res = get_food_info(food)
+                    elif tool_call.function.name == "calc_exercise_calories":
+                        # 🚨 防盗门2：强制补齐大模型漏掉的参数
+                        ex_type = args.get("exercise_type", "跑步")
+                        dur = args.get("duration_min", 60)
+                        wt = args.get("weight", 70)
+                        inc = args.get("incline", 0)
+                        spd = args.get("speed", 0)
+                        
+                        # 如果大模型把速度/坡度漏了，强行从用户的提问里正则提取
+                        if inc == 0 and "坡度" in prompt:
+                            import re
+                            match = re.search(r'坡度(\d+)', prompt)
+                            if match: inc = int(match.group(1))
+                        if spd == 0 and "速度" in prompt:
+                            import re
+                            match = re.search(r'速度([\d\.]+)', prompt)
+                            if match: spd = float(match.group(1))
+                            
+                        res = calc_exercise_calories(ex_type, dur, wt, inc, spd)
+                    
+                    # 在界面上显示正确的计算结果
+                    st.success(f"📊 数据核对：{res}")
+                    
+                    current_messages.append({
+                        "role": "tool", 
+                        "tool_call_id": tool_call.id, 
+                        "content": f"{res}。请直接复述结果，不要修改数字！"
+                    })
+                
+                final_res = client.chat.completions.create(model="glm-4-flash", messages=current_messages)
+                ans = final_res.choices[0].message.content
+            else:
+                ans = response_msg.content
+                
+            st.session_state.messages.append({"role": "assistant", "content": ans})
+            with st.chat_message("assistant"):
+                st.markdown(ans)
+                
+        except Exception as e:
+            st.error(f"大模型抽风了，请再问一遍。错误：{e}")
