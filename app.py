@@ -10,9 +10,13 @@ from tool import get_food_info, calc_exercise_calories
 st.set_page_config(page_title="全能 AI 私教", page_icon="🏋️")
 st.title("🏋️ 全能 AI 私教 ")
 
-with st.sidebar:
-    st.header("设置")
-    api_key = st.text_input("请输入 API Key", type="password")
+# 尝试从后台 Secrets 读取，如果读不到，才显示输入框（方便你本地测试）
+try:
+    api_key = st.secrets["ZHIPU_API_KEY"]
+except:
+    with st.sidebar:
+        st.header("设置")
+        api_key = st.text_input("请输入 API Key", type="password")
 
 if not api_key:
     st.info("请先在左侧输入 API Key！")
