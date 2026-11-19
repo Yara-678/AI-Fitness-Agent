@@ -4,12 +4,15 @@ def get_food_info(food_name):
     try:
         with open("food_data.json", "r", encoding="utf-8") as f:
             food_db = json.load(f)
+        
         if food_name in food_db:
             data = food_db[food_name]
-            return f"【来自本地数据库】每100g {food_name}：热量{data['calories']}大卡。"
-        return "未找到该食物。"
-    except:
-        return "读取食物库失败。"
+            return f"【来自本地数据库】每100g {food_name}：热量{data['calories']}大卡，蛋白质{data['protein']}g。"
+        else:
+            # 👇 找不到时，给大模型一个提示，让它自己去查常识！
+            return f"本地数据库没有 {food_name} 的精确数据，请直接根据你的常识估算它的热量回答用户。"
+    except Exception as e:
+        return "数据库读取失败，请根据常识回答。"
 
 def calc_exercise_calories(exercise_type, duration_min, weight, incline=0, speed=0):
     # 强制识别：只要带了跑步/爬坡字眼，直接给高强度基础值
