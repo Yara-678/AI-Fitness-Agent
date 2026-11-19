@@ -2,9 +2,10 @@ import streamlit as st
 import json
 import os
 import re
+import numpy as np
 from openai import OpenAI
-from langchain_community.document_loaders import TextLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 # 👇 这里只导入计算运动热量的函数了
 from tool import calc_exercise_calories
 
@@ -25,35 +26,51 @@ if not api_key:
 
 client = OpenAI(api_key=api_key, base_url="https://open.bigmodel.cn/api/paas/v4/")
 
-# ================= 1. 查书引擎与硬核兜底 =================
-@st.cache_resource(show_spinner="正在阅读权威书籍...")
+# ================= 1. 升级版：TF-IDF 本地向量检索 =================
+@st.cache_resource(show_spinner="正在构建本地向量索引...")
 def init_rag_engine():
     try:
-        if not os.path.exists("data/book.md"): return []
-        loader = TextLoader("data/book.md", encoding="utf-8")
-        docs = loader.load()
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=50)
-        return text_splitter.split_documents(docs)
-    except: return []
+        if not os.path.exists("data/book.md"): return None, None, []
+        with open("data/book.md", "r", encoding="utf-8") as f:
+            text = f.read()
+        
+        # 按段落切片
+        paragraphs = [p.strip() for p in text.split("\n\n") if len(p.strip()) > 10]
+        
+        # 🚨 核心：使用 TF-IDF 算法把文字变成向量矩阵
+        vectorizer = TfidfVectorizer()
+        tfidf_matrix = vectorizer.fit_transform(paragraphs)
+        
+        return vectorizer, tfidf_matrix, paragraphs
+    except Exception as e:
+        return None, None, []
 
-# 终极兜底语料，防止云端读不到文件
+# 终极兜底语料
 FALLBACK_BOOK = "减脂期不能吃蛋黄是绝对错误的！蛋黄富含优质脂肪、维生素和微量元素，每天吃1-2个全蛋不仅不会长胖，反而有利于激素分泌，对减脂大有裨益。"
 
-def local_search(query, splits):
-    if not splits: return FALLBACK_BOOK
-    keywords = [kw for kw in list(query) if kw.strip()]
-    matched = []
-    for doc in splits:
-        if sum(1 for kw in keywords if kw in doc.page_content) >= 2:
-            matched.append(doc.page_content)
+# 向量检索函数
+def vector_search(query, top_k=2):
+    vectorizer, tfidf_matrix, paragraphs = init_rag_engine()
+    if vectorizer is None or tfidf_matrix is None: 
+        return FALLBACK_BOOK
     
-    result = "\n".join(matched[:2])
-    if not result and "蛋黄" in query: 
+    # 将用户的提问也变成向量
+    query_vec = vectorizer.transform([query])
+    
+    # 🚨 核心：计算“用户提问”与“书籍段落”的余弦相似度
+    similarities = cosine_similarity(query_vec, tfidf_matrix).flatten()
+    
+    # 找到相似度最高的前 2 个段落索引
+    top_indices = similarities.argsort()[-top_k:][::-1]
+    
+    # 如果最高相似度大于0，说明匹配到了
+    if similarities[top_indices[0]] > 0.05:
+        return "\n".join([paragraphs[i] for i in top_indices])
+    
+    if "蛋黄" in query:
         return FALLBACK_BOOK
         
-    return result
-
-splits = init_rag_engine()
+    return "知识库中未找到高度相关的段落。"
 # =======================================================
 
 # 👇 工具列表里，我们只保留运动计算了！
@@ -94,7 +111,8 @@ if prompt := st.chat_input("今天练了什么？或者想问书上怎么说的�
         st.markdown(prompt)
 
     with st.spinner("教练思考中..."):
-        context = local_search(prompt, splits)
+        # 👇 改成了调用 vector_search
+        context = vector_search(prompt)
         
         # 👇 这里修改了最高指令：告诉大模型食物热量直接自己算，别查库！
         system_prompt = (
@@ -124,7 +142,6 @@ if prompt := st.chat_input("今天练了什么？或者想问书上怎么说的�
                         args = {}
                         
                     res = ""
-                    # 👇 这里去掉了查食物的逻辑，只保留运动计算
                     if tool_call.function.name == "calc_exercise_calories":
                         ex_type = args.get("exercise_type", "快走")
                         dur = args.get("duration_min", 30)
