@@ -5,7 +5,8 @@ import re
 from openai import OpenAI
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from tool import get_food_info, calc_exercise_calories
+# 👇 这里只导入计算运动热量的函数了
+from tool import calc_exercise_calories
 
 st.set_page_config(page_title="全能 AI 私教", page_icon="🏋️")
 st.title("🏋️ 全能 AI 私教 ")
@@ -55,15 +56,8 @@ def local_search(query, splits):
 splits = init_rag_engine()
 # =======================================================
 
+# 👇 工具列表里，我们只保留运动计算了！
 tools = [
-    {
-        "type": "function", 
-        "function": {
-            "name": "get_food_info", 
-            "description": "查询食物每百克的热量", 
-            "parameters": {"type": "object", "properties": {"food_name": {"type": "string"}}, "required": ["food_name"]}
-        }
-    },
     {
         "type": "function", 
         "function": {
@@ -102,8 +96,13 @@ if prompt := st.chat_input("今天练了什么？或者想问书上怎么说的�
     with st.spinner("教练思考中..."):
         context = local_search(prompt, splits)
         
-        # 强制大模型只读参考资料的提示词
-        system_prompt = f"你是一个专业教练。请**必须优先**根据以下参考资料回答问题：\n{context}\n如果用户问热量，必须调用工具！"
+        # 👇 这里修改了最高指令：告诉大模型食物热量直接自己算，别查库！
+        system_prompt = (
+            f"你是一个专业的健身和营养教练。请优先根据以下参考资料回答问题：\n{context}\n\n"
+            f"【最高指令】：\n"
+            f"1. 如果用户询问运动消耗，你绝对不能自己算，必须调用 calc_exercise_calories 工具！\n"
+            f"2. 如果用户询问食物的热量和营养，请**直接使用你自带的庞大常识知识库进行精准估算**，绝对不要去调用任何查食物的工具！"
+        )
         current_messages = [{"role": "system", "content": system_prompt}] + st.session_state.messages
 
         try:
@@ -125,10 +124,8 @@ if prompt := st.chat_input("今天练了什么？或者想问书上怎么说的�
                         args = {}
                         
                     res = ""
-                    if tool_call.function.name == "get_food_info":
-                        food = args.get("food_name", "苹果")
-                        res = get_food_info(food)
-                    elif tool_call.function.name == "calc_exercise_calories":
+                    # 👇 这里去掉了查食物的逻辑，只保留运动计算
+                    if tool_call.function.name == "calc_exercise_calories":
                         ex_type = args.get("exercise_type", "快走")
                         dur = args.get("duration_min", 30)
                         wt = args.get("weight", 70)
@@ -156,6 +153,9 @@ if prompt := st.chat_input("今天练了什么？或者想问书上怎么说的�
                         "tool_call_id": tool_call.id, 
                         "content": f"{res}。请直接复述结果，不要修改数字！"
                     })
+                
+                # 🚨 终极反杀 3：加一句提示词，防止它把底层代码当文本吐出来
+                current_messages.append({"role": "system", "content": "请直接用自然语言回答，千万不要在回复中输出任何工具调用的格式或代码！"})
                 
                 final_res = client.chat.completions.create(model="glm-4-flash", messages=current_messages)
                 ans = final_res.choices[0].message.content

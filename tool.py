@@ -1,19 +1,4 @@
-import json
-
-def get_food_info(food_name):
-    try:
-        with open("food_data.json", "r", encoding="utf-8") as f:
-            food_db = json.load(f)
-        
-        if food_name in food_db:
-            data = food_db[food_name]
-            return f"【来自本地数据库】每100g {food_name}：热量{data['calories']}大卡，蛋白质{data['protein']}g。"
-        else:
-            # 👇 找不到时，给大模型一个提示，让它自己去查常识！
-            return f"本地数据库没有 {food_name} 的精确数据，请直接根据你的常识估算它的热量回答用户。"
-    except Exception as e:
-        return "数据库读取失败，请根据常识回答。"
-
+# 工具：计算运动消耗热量
 def calc_exercise_calories(exercise_type, duration_min, weight, incline=0, speed=0):
     # 强制识别：只要带了跑步/爬坡字眼，直接给高强度基础值
     if "跑步" in exercise_type or "爬坡" in exercise_type or "running" in exercise_type.lower():
@@ -31,4 +16,4 @@ def calc_exercise_calories(exercise_type, duration_min, weight, incline=0, speed
         
     calories = mets * weight * (duration_min / 60)
     
-    return f"【来自本地计算器】进行{duration_min}分钟的{exercise_type}（系统默认坡度{incline}，速度{speed}），大约消耗 {calories:.0f} 大卡。"
+    return f"【来自本地计算器】根据你的体重（{weight}kg）和运动参数（{exercise_type}，坡度{incline}，速度{speed}），进行{duration_min}分钟，大约消耗 {calories:.0f} 大卡。"
